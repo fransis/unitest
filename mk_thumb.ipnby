@@ -1,1 +1,86 @@
 
+import os
+import pandas as pd
+from tqdm.notebook import tqdm
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
+
+import cv2
+from PIL import Image
+from pillow_heif import register_heif_opener
+register_heif_opener()
+
+base_path = 'D:/onedrive/Photo_backup/'
+resizer = transforms.Resize((224, 224))
+df_total = pd.read_feather('./data/total_list.ftr')
+
+def target_pathname(idx):
+    path = './data/thumb/{:03d}/'.format(idx // 1000)
+    if not os.path.exists(path):
+        os.mkdir(path)
+    return path + '{:06d}.jpg'.format(idx)
+
+def process_image(idx, pathname):
+    img = Image.open(pathname)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    fname = target_pathname(idx)
+    resizer(img).save(fname)
+    df_total.loc[idx, 'thumb'] = '*'
+
+def process_video(idx, pathname):
+    debug = False
+    if debug:
+        print(idx, pathname)
+    cap = cv2.VideoCapture(pathname)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    fcount = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    dst = Image.new('RGB', (224*4, 224))
+    if debug:
+        print('fps:', fps)
+        print('fcount:', fcount)
+    for i, pos in enumerate([0, fcount*.25, fcount*.5, fcount*.75]):
+        if debug:
+            print('pos:', int(pos))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(pos))
+        _, img = cap.read()
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(img)
+        img = resizer(img)
+        if debug:
+            display(img)
+        dst.paste(img, (224*i, 0))
+    cap.release()
+    dst.save(target_pathname(idx))
+    df_total.loc[idx, 'fps'] = fps
+    df_total.loc[idx, 'duration'] = fcount / fps
+    df_total.loc[idx, 'multi'] = '*'
+    df_total.loc[idx, 'thumb'] = '*'
+
+def process(idx):
+    pathname = base_path + df_total.loc[idx, 'pathname']
+    ext = df_total.loc[idx, 'ext']
+    if ext in ['mp4', 'mov', 'wmv', 'mpg']:
+        process_video(idx, pathname)
+    else:
+        if ext in ['rw2']:
+            fname = pathname.split('/')[-1]
+            fname = '.'.join(fname.split('.')[:-1])
+            pathname = './data/converted/' + fname + '.jpg'
+        process_image(idx, pathname)
+
+df_work = df_total[df_total.thumb != '*']
+df_work = df_work[df_work['del'] != '*']
+
+for idx in tqdm(df_work.index):
+    try:
+        process(idx)
+    except KeyboardInterrupt:
+        break
+    except:
+        pathname = base_path + df_total.loc[idx, 'pathname']
+        print('Error idx({}), name({})'.format(idx, pathname))
+
+df_total.to_feather('./data/total_list.ftr')
+df_total
